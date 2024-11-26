@@ -1,0 +1,45 @@
+# Python virtual environment
+myenv/
+venv/
+env/
+.env
+
+# Python cache files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Database files
+*.db
+textbook_questions.db
+
+# PDF files in data directory
+data/*.pdf
+
+# Output files
+output/
+*.json
+*.txt
+
+# Temporary files
+temp/
+
+# macOS system files
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# IDE specific files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Log files
+*.log
+logs/
+
+# Distribution / packaging
+dist/
+build/
+*.egg-info/
