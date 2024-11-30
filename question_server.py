@@ -4,7 +4,7 @@ from pydantic import BaseModel
 import uvicorn
 import pdfplumber
 import hashlib
-from src.ai_handler import ChatGPTHandler, TOCStructure
+from src.ai_handler import ChatGPTHandler
 from src.pdf_parser import find_toc_pages, parse_table_of_contents, find_page_offset, extract_chapter_sections
 import os
 
