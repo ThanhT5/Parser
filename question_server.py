@@ -22,6 +22,9 @@ app.add_middleware(
 
 ai_handler = ChatGPTHandler()
 
+@app.get("/")
+async def root():
+    return {"message": "Welcome to the PDF Processing API"}
 
 @app.post("/upload_pdf")
 async def upload_pdf(file: UploadFile = File(...)):
