@@ -2,6 +2,7 @@ import os  # Importing the os module to interact with the operating system
 from openai import OpenAI  # Importing the OpenAI client for API interactions
 from pydantic import BaseModel  # Importing BaseModel for data validation and settings management
 from typing import List  # Importing List for type hinting
+from dotenv import load_dotenv
 
 # Class representing a single entry in the table of contents (TOC)
 class TOCEntry(BaseModel):
@@ -28,6 +29,7 @@ class Questions(BaseModel):
 class ChatGPTHandler:
     def __init__(self):
         # Retrieve the OpenAI API key from environment variables
+        load_dotenv()
         api_key = os.getenv("OPENAI_API_KEY")
         if not api_key:
             # Raise an error if the API key is not found
