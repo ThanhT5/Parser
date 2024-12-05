@@ -1,55 +1,56 @@
-import os  # Importing the os module to interact with the operating system
-from openai import OpenAI  # Importing the OpenAI client for API interactions
-from pydantic import BaseModel  # Importing BaseModel for data validation and settings management
-from typing import List  # Importing List for type hinting
-from dotenv import load_dotenv
+import os
+from openai import OpenAI
+from pydantic import BaseModel
+from typing import List
 
-# Class representing a single entry in the table of contents (TOC)
+
 class TOCEntry(BaseModel):
-    level: int  # The hierarchy level of the entry (0 for chapters, 1 for sections, etc.)
-    number: str  # The number of the chapter or section
-    title: str  # The title of the chapter or section
-    page: int  # The page number where the chapter or section starts
+    level: int
+    number: str
+    title: str
+    page: int
 
-# Class representing the structure of the table of contents
+
 class TOCStructure(BaseModel):
-    entries: List[TOCEntry]  # A list of TOCEntry objects
+    entries: List[TOCEntry]
 
-# Class representing a question and its answer
+
 class Question(BaseModel):
-    # chapter: int  # Optional: chapter number (commented out for now)
-    question: str  # The question text
-    answer: str  # The answer to the question
+    #chapter: int
+    question: str
+    answer: str
 
-# Class representing a collection of questions
+
 class Questions(BaseModel):
-    questions: List[Question]  # A list of Question objects
+    questions: List[Question]
 
-# Class to handle interactions with the ChatGPT API
+
 class ChatGPTHandler:
     def __init__(self):
-        # Retrieve the OpenAI API key from environment variables
-        load_dotenv()
         api_key = os.getenv("OPENAI_API_KEY")
         if not api_key:
-            # Raise an error if the API key is not found
             raise ValueError("No OpenAI API key found. Please set the OPENAI_API_KEY environment variable.")
-        self.client = OpenAI(api_key=api_key)  # Initialize the OpenAI client with the API key
+        self.client = OpenAI(api_key=api_key)
+        self._toc_cache = {}
 
-    # Method to process the table of contents and return a structured TOC
+
     def process_toc(self, toc_content: str) -> TOCStructure:
-        prompt = self._create_toc_prompt(toc_content)  # Create a prompt for the API
+        cache_key = hash(toc_content)
+        if cache_key in self._toc_cache:
+            return self._toc_cache[cache_key]
+           
+        prompt = self._create_toc_prompt(toc_content)
         completion = self.client.beta.chat.completions.parse(
-            model="gpt-4o-mini",  # Specify the model to use
+            model="gpt-4o-mini",  # Use the appropriate model
             messages=[
                 {"role": "system", "content": "You are a helpful assistant that analyzes and structures table of contents information from textbooks."},
-                {"role": "user", "content": prompt}  # User's prompt for processing
+                {"role": "user", "content": prompt}
             ],
-            response_format=TOCStructure,  # Specify the expected response format
+            response_format=TOCStructure,
         )
-        return completion.choices[0].message.parsed  # Return the parsed response
-
-    # Private method to create a prompt for analyzing the TOC
+        self._toc_cache[cache_key] = completion.choices[0].message.parsed
+        return self._toc_cache[cache_key]
+   
     def _create_toc_prompt(self, toc_content: str) -> str:
         return f"""
         Please analyze the following table of contents from a textbook and extract the following information:
@@ -57,9 +58,12 @@ class ChatGPTHandler:
         - Section numbers and titles within each chapter
         - Page numbers for each chapter and section
 
+
         Here's the table of contents content:
 
+
         {toc_content}
+
 
         Please structure the information according to the following format:
         {{
@@ -80,33 +84,71 @@ class ChatGPTHandler:
             ]
         }}
 
+
         Use "level" to indicate the hierarchy:
         - 0 for chapters
         - 1 for sections
         - 2 for subsections (if any)
         - and so on for deeper levels
         """
-    
-    # Method to generate questions based on section content
-    def generate_questions(self, section_content: str) -> List[str]:
-        prompt = self._create_question_prompt(section_content)  # Create a prompt for question generation
+   
+    def generate_questions(self, section_content: str, num_questions: int = 5) -> Questions:
+        """
+        Generate a specific number of questions from section content.
+       
+        Args:
+            section_content: The text content to generate questions from
+            num_questions: Number of questions to generate (default: 5)
+           
+        Returns:
+            Questions object containing generated questions and answers
+        """
+        prompt = self._create_question_prompt(section_content, num_questions)
         completion = self.client.beta.chat.completions.parse(
-            model="gpt-4o-mini",  # Specify the model to use
+            model="gpt-4o-mini",  # Use the appropriate model
             messages=[
-                {"role": "system", "content": "You are an AI assistant that generates 5 fill-in-the-blank questions from textbook sections provided to you (delimited by XML tags). Focus on the main educational content, ignoring figure descriptions, in-text questions, and other miscellaneous information. Generate 5 questions for each request. If you cannot create suitable questions from the given content, state 'I could not generate appropriate questions from this content.'"},
-                {"role": "user", "content": prompt}  # User's prompt for generating questions
+                {
+                    "role": "system",
+                    "content": (
+                        f"You are an AI assistant that generates exactly {num_questions} "
+                        "fill-in-the-blank questions from textbook sections provided to you "
+                        "(delimited by XML tags). Each question must:\n"
+                        "- Have exactly ONE blank space indicated by '_____' \n"
+                        "- The blank can accept multiple words as an answer, but there should only be one blank per question\n"
+                        "Example good format:\n"
+                        "Q: The first civilization in Mesopotamia was established by the _____ people.\n"
+                        "A: Sumerian\n\n"
+                        "Example bad format (do not use):\n"
+                        "Q1: The _____ civilization was established in _____ BCE.\n"
+                        "A1: Sumerian, 4000\n\n"
+                        "Focus on the main educational content, ignoring figure descriptions, "
+                        "in-text questions, and other miscellaneous information. If you cannot "
+                        "create suitable questions from the given content, state 'I could not "
+                        "generate appropriate questions from this content.'"
+                    )
+                },
+                {"role": "user", "content": prompt}
             ],
-            response_format=Questions,  # Specify the expected response format
+            response_format=Questions,
         )
-        return completion.choices[0].message.parsed  # Return the parsed response
-    
-    # Private method to create a prompt for generating questions
-    def _create_question_prompt(self, section_content: str) -> str:
+        return completion.choices[0].message.parsed
+   
+    def _create_question_prompt(self, section_content: str, num_questions: int) -> str:
+        """
+        Create a prompt for question generation with specific question count.
+       
+        Args:
+            section_content: The content to generate questions from
+            num_questions: Number of questions to generate
+           
+        Returns:
+            Formatted prompt string
+        """
         return f"""
         <section>
         {section_content}
         </section>
-        Please structure the questions in the following format:
+        Please generate exactly {num_questions} questions in the following format:
         {{
             "questions": [
                 {{

@@ -4,7 +4,7 @@ import os  # Import os for file path operations
 from typing import List, Dict  # Import necessary types for type hinting
 from src.ai_handler import ChatGPTHandler  # Import the ChatGPTHandler for processing TOC
 import tiktoken  # For token counting
-
+from src.utils.resource_monitor import ResourceMonitor  # Import the ResourceMonitor for throttling
 # Define the base directory of the project
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -148,84 +148,111 @@ def find_page_offset(pdf, structured_toc: dict, last_toc_page: int) -> int:
     # If we've reached this point, we couldn't find the chapter or section
     raise ValueError(f"Could not find consistent offset for first chapter (page {chapter_page}) or its first section (page {section_page})")
 
-def extract_chapter_sections(pdf, structured_toc: dict, page_offset: int, desired_chapter: int, max_tokens: int = 75000) -> dict:
+def extract_chapter_sections(pdf, structured_toc: dict, page_offset: int, desired_chapter: int, max_tokens: int = 75000, batch_size: int = 5) -> dict:
     """
     Extract and label sections for a given chapter number, splitting large sections if necessary.
-    
-    :param pdf: The PDF object
-    :param structured_toc: The structured table of contents
-    :param page_offset: The calculated page offset
-    :param desired_chapter: The chapter number to extract
-    :param max_tokens: Maximum number of tokens per section (default 75000)
-    :return: A dictionary with section numbers as keys and their content as values
+    Includes resource monitoring and batch processing for efficient resource usage.
+   
+    Args:
+        pdf: The PDF object
+        structured_toc: The structured table of contents
+        page_offset: The calculated page offset
+        desired_chapter: The chapter number to extract
+        max_tokens: Maximum number of tokens per section (default 75000)
+        batch_size: Number of pages to process in each batch (default 5)
+    Returns:
+        A dictionary with section numbers as keys and their content as values
     """
-    # Find the desired chapter in the TOC (Table of Contents)
-    chapter = next((entry for entry in structured_toc['entries'] if entry['level'] == 0 and entry['number'] == str(desired_chapter)), None)
-    
-    # Raise an error if the chapter is not found
+    # Initialize resource monitor with conservative thresholds for t2.micro
+    monitor = ResourceMonitor(cpu_threshold=70, memory_threshold=80)
+   
+    def process_text_batch(pages: List[int]) -> str:
+        """Process a batch of pages with resource monitoring."""
+        batch_content = ""
+        for page_num in pages:
+            with monitor.throttle_if_needed():
+                if page_num < len(pdf.pages):
+                    page = pdf.pages[page_num]
+                    batch_content += page.extract_text()
+                    # Release page object explicitly
+                    page.flush_cache()
+        return batch_content.strip()
+
+
+    # Find the desired chapter in the TOC
+    chapter = next((entry for entry in structured_toc['entries']
+                   if entry['level'] == 0 and entry['number'] == str(desired_chapter)), None)
+   
     if not chapter:
         raise ValueError(f"Chapter {desired_chapter} not found in the table of contents.")
-    
+   
     # Find all sections of the desired chapter
-    chapter_sections = [entry for entry in structured_toc['entries'] 
-                        if entry['level'] == 1 and entry['number'].startswith(f"{desired_chapter}.")]
-    
-    # If there are no sections, we'll treat the whole chapter as one section
+    chapter_sections = [entry for entry in structured_toc['entries']
+                       if entry['level'] == 1 and entry['number'].startswith(f"{desired_chapter}.")]
+   
     if not chapter_sections:
         chapter_sections = [chapter]
-    
-    # Dictionary to hold the extracted sections
+   
     extracted_sections = {}
-    # Initialize the tokenizer for the specified model
-    enc = tiktoken.encoding_for_model("gpt-4o-mini")  # or whichever model you're using
+    enc = tiktoken.encoding_for_model("gpt-4")  # or whichever model you're using
 
-    # Iterate through each section found in the chapter
+
+    # Process sections in batches
     for i, section in enumerate(chapter_sections):
-        # Calculate the start and end pages for the section
-        start_page = section['page'] + page_offset  # Start page for the section
-        end_page = chapter_sections[i+1]['page'] + page_offset if i+1 < len(chapter_sections) else None  # End page for the section
-        
-        # Initialize a variable to hold the content of the section
+        start_page = section['page'] + page_offset
+        end_page = (chapter_sections[i+1]['page'] + page_offset
+                   if i+1 < len(chapter_sections) else len(pdf.pages))
+       
         section_content = ""
-        # Extract text from the pages that belong to this section
-        for page_num in range(start_page, end_page if end_page else len(pdf.pages)):
-            page = pdf.pages[page_num]  # Get the page object
-            section_content += page.extract_text()  # Append the extracted text to section content
-        
-        # Clean up the extracted content by stripping whitespace
-        section_content = section_content.strip()
-        
-        # Split large sections if they exceed the maximum token limit
-        tokens = enc.encode(section_content)  # Tokenize the section content
-        if len(tokens) > max_tokens:
-            parts = []  # List to hold the split parts of the section
-            current_part = ""  # Current part being constructed
-            current_tokens = 0  # Token count for the current part
-            # Split the section content into paragraphs
-            for paragraph in section_content.split('\n'):
-                paragraph_tokens = enc.encode(paragraph)  # Tokenize the paragraph
-                # Check if adding this paragraph would exceed the max token limit
-                if current_tokens + len(paragraph_tokens) > max_tokens:
-                    if current_part:
-                        parts.append(current_part.strip())  # Save the current part
-                    current_part = paragraph  # Start a new part with the current paragraph
-                    current_tokens = len(paragraph_tokens)  # Reset token count for the new part
-                else:
-                    current_part += "\n" + paragraph  # Add paragraph to the current part
-                    current_tokens += len(paragraph_tokens)  # Update token count
-            if current_part:
-                parts.append(current_part.strip())  # Add the last part if it exists
-            
-            # Assign the split parts to the extracted sections with appropriate numbering
-            for j, part in enumerate(parts):
-                section_number = f"{section['number']}.{j+1}" if section['level'] == 1 else f"{desired_chapter}.{j+1}"
-                extracted_sections[section_number] = part  # Store the part in the dictionary
-        else:
-            # If the section is within the token limit, add it directly to the extracted sections
-            section_number = section['number'] if section['level'] == 1 else str(desired_chapter)
-            extracted_sections[section_number] = section_content  # Store the section content in the dictionary
-    
-    return extracted_sections  # Return the dictionary of extracted sections
+        # Process pages in batches
+        for batch_start in range(start_page, end_page, batch_size):
+            batch_end = min(batch_start + batch_size, end_page)
+            batch_pages = list(range(batch_start, batch_end))
+           
+            with monitor.throttle_if_needed():
+                batch_content = process_text_batch(batch_pages)
+                section_content += batch_content
+
+
+        # Process the section content
+        with monitor.throttle_if_needed():
+            tokens = enc.encode(section_content)
+           
+            if len(tokens) > max_tokens:
+                # Split into smaller chunks if needed
+                parts = []
+                current_part = ""
+                current_tokens = 0
+               
+                for paragraph in section_content.split('\n'):
+                    paragraph_tokens = enc.encode(paragraph)
+                    if current_tokens + len(paragraph_tokens) > max_tokens:
+                        if current_part:
+                            parts.append(current_part.strip())
+                        current_part = paragraph
+                        current_tokens = len(paragraph_tokens)
+                    else:
+                        current_part += "\n" + paragraph
+                        current_tokens += len(paragraph_tokens)
+               
+                if current_part:
+                    parts.append(current_part.strip())
+               
+                # Store the parts with appropriate section numbers
+                for j, part in enumerate(parts, 1):
+                    section_number = (f"{section['number']}.{j}"
+                                   if section['level'] == 1
+                                   else f"{desired_chapter}.{j}")
+                    extracted_sections[section_number] = part
+            else:
+                # Store the entire section if it's within token limits
+                section_number = (section['number']
+                                if section['level'] == 1
+                                else str(desired_chapter))
+                extracted_sections[section_number] = section_content
+
+
+    return extracted_sections
 
 def analyze_pdf_and_generate_questions(pdf_path: str, desired_chapter: int, max_tokens: int = 75000) -> List[str]:
     """
