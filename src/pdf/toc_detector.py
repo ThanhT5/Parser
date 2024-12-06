@@ -1,5 +1,6 @@
 import re
 from typing import List
+from statistics import mode
 
 
 # Set of terms that might indicate a table of contents (TOC)
@@ -12,7 +13,7 @@ TOC_END_TERMS = {
     "references", "credits",
 }
 TOC_SKIP_TERMS = {
-    "brief contents"  # Terms to skip when searching for TOC
+    "brief contents", "contents at a glance"  # Terms to skip when searching for TOC
 }
 
 
@@ -27,7 +28,8 @@ def find_toc_pages(pdf) -> List[int]:
     min_title_page_distance = page_width * 0.15  # 15% of page width    
     # Enhanced patterns for TOC entries
     toc_patterns = [
-        r'^(chapter|\d+\.|appendix\s+[a-z]|[ivxlcdm]+\.)',  # Standard chapters, numbers, appendices, roman numerals
+        r'^(chapter|summary|conclusion|introduction|\d+\.|appendix\s+[a-z]|[ivxlcdm]+\.)',  # Standard chapters, summary, introduction, numbers, appendices, roman numerals
+        r'^\d+\.\d+',  # Chapter sections (e.g., 1.1, 2.3, 10.4)
         r'^[A-Z][\.\s]',  # Single letter sections
         r'^(part|section|unit)\s+[a-z0-9]',  # Other common section markers
         r'^[\u0400-\u04FF]+',  # Support for non-Latin scripts (e.g., Cyrillic)
@@ -45,13 +47,19 @@ def find_toc_pages(pdf) -> List[int]:
                 words = page.extract_words()
                 for j, word in enumerate(words[:-1]):
                     if any(re.match(pattern, word['text'].lower()) for pattern in toc_patterns):
-                        next_words = words[j+1:j+10]
+                        next_words = []
+                        k = j + 1
+                        while len(next_words) < 10 and k < len(words):
+                            if words[k]['text'] != '.':
+                                next_words.append(words[k])
+                            k += 1
                         if any(w['text'].isdigit() and
                               float(w['x0']) - float(word['x0']) > min_title_page_distance
                               for w in next_words):
                             toc_start_found = True
                             break
                 if toc_start_found:
+                    print(f"TOC start at page {i}")
                     break
    
     if not toc_start_found:
@@ -68,7 +76,12 @@ def find_toc_pages(pdf) -> List[int]:
             words = page.extract_words()
             for j, word in enumerate(words[:-1]):
                 if any(re.match(pattern, word['text'].lower()) for pattern in toc_patterns):
-                    next_words = words[j+1:j+10]
+                    next_words = []
+                    k = j + 1
+                    while len(next_words) < 10 and k < len(words):
+                        if words[k]['text'] != '.':
+                            next_words.append(words[k])
+                        k += 1
                     if any(w['text'].isdigit() and
                           float(w['x0']) - float(word['x0']) > min_title_page_distance
                           for w in next_words):
@@ -90,7 +103,12 @@ def find_toc_pages(pdf) -> List[int]:
             words = page.extract_words()
             for j, word in enumerate(words[:-1]):
                 if any(re.match(pattern, word['text'].lower()) for pattern in toc_patterns):
-                    next_words = words[j+1:j+10]
+                    next_words = []
+                    k = j + 1
+                    while len(next_words) < 10 and k < len(words):
+                        if words[k]['text'] != '.':
+                            next_words.append(words[k])
+                        k += 1
                     if any(w['text'].isdigit() and
                           float(w['x0']) - float(word['x0']) > min_title_page_distance
                           for w in next_words):
@@ -98,6 +116,7 @@ def find_toc_pages(pdf) -> List[int]:
                         break
        
         if valid_entries >= len(toc_pages) // 2:  # At least half the pages should have valid entries
+            print(f"TOC found using columnar analysis: {toc_pages}")
             return toc_pages
    
     # If columnar method failed or gave suspicious results,
@@ -111,7 +130,12 @@ def find_toc_pages(pdf) -> List[int]:
             words = page.extract_words()
             for j, word in enumerate(words[:-1]):
                 if any(re.match(pattern, word['text'].lower()) for pattern in toc_patterns):
-                    next_words = words[j+1:j+10]
+                    next_words = []
+                    k = j + 1
+                    while len(next_words) < 10 and k < len(words):
+                        if words[k]['text'] != '.':
+                            next_words.append(words[k])
+                        k += 1
                     if any(w['text'].isdigit() and
                           float(w['x0']) - float(word['x0']) > min_title_page_distance
                           for w in next_words):
@@ -119,6 +143,7 @@ def find_toc_pages(pdf) -> List[int]:
                         break
        
         if valid_entries >= len(toc_pages) // 2:
+            print(f"TOC found using numeric density analysis: {toc_pages}")
             return toc_pages
    
     # If both methods failed or gave suspicious results,
@@ -185,16 +210,16 @@ def find_toc_pages_1(pdf) -> List[int]:
             continue
            
         # Calculate numeric density (ratio of numbers to total words)
-        numeric_words = sum(1 for word in words if any(c.isdigit() for c in word['text']))
+        numeric_words = sum(1 for word in words if any(c.isdigit() for c in word['text']) and word['text'] not in {'.', ','})
         numeric_density = numeric_words / len(words) if words else 0
-       
         # Check for TOC start
         if not toc_started:
             if any(term in text for term in TOC_SKIP_TERMS):
                 continue
             if any(re.search(r'\b' + re.escape(term) + r'\b', text) for term in TOC_START_TERMS):
                 # Verify it's a TOC by checking numeric density
-                if numeric_density > 0.15:  # At least 15% of words contain numbers
+                if numeric_density > 0.08:  # At least 15% of words contain numbers
+                    print(f"Numeric density: {numeric_density}, page: {i + 1}")
                     toc_started = True
                     toc_pages.add(i)
                     prev_numeric_density = numeric_density
@@ -227,9 +252,9 @@ def find_toc_pages_1(pdf) -> List[int]:
             toc_pages.add(i)
             prev_numeric_density = numeric_density
        
-        # Limit to first 50 pages
-        if i >= 50:
-            print("Error: TOC not found within the first 50 pages.")
+        # Limit to first 30 pages
+        if i >= 30:
+            print("Error: TOC not found within the first 30 pages.")
             return list(toc_pages)
    
     return list(toc_pages)
@@ -261,7 +286,12 @@ def find_toc_pages_2(pdf) -> List[int]:
                 for j, word in enumerate(words[:-1]):
                     if re.match(r'^(chapter|\d+\.)', word['text'].lower()):
                         # Check for page number at the end of line or in right column
-                        next_words = words[j+1:j+10]
+                        next_words = []
+                        k = j + 1
+                        while len(next_words) < 10 and k < len(words):
+                            if words[k]['text'] != '.':
+                                next_words.append(words[k])
+                            k += 1
                         if any(w['text'].isdigit() and float(w['x0']) > float(word['x0']) + 100 for w in next_words):
                             toc_started = True
                             toc_pages.add(i)
@@ -278,10 +308,10 @@ def find_toc_pages_2(pdf) -> List[int]:
                                         current_cluster.append(x)
                                     else:
                                         if len(current_cluster) > 1:
-                                            x_clusters.append(sum(current_cluster) / len(current_cluster))
+                                            x_clusters.append(mode(current_cluster))
                                         current_cluster = [x]
                                 if len(current_cluster) > 1:
-                                    x_clusters.append(sum(current_cluster) / len(current_cluster))
+                                    x_clusters.append(mode(current_cluster))
                                 if x_clusters:
                                     column_x_coords = x_clusters
                             break
@@ -315,7 +345,12 @@ def find_toc_pages_2(pdf) -> List[int]:
             entries_found = 0
             for j, word in enumerate(words[:-1]):
                 if re.match(r'^(chapter|\d+\.)', word['text'].lower()):
-                    next_words = words[j+1:j+10]
+                    next_words = []
+                    k = j + 1
+                    while len(next_words) < 10 and k < len(words):
+                        if words[k]['text'] != '.':
+                            next_words.append(words[k])
+                        k += 1
                     if any(w['text'].isdigit() and float(w['x0']) > float(word['x0']) + 100 for w in next_words):
                         entries_found += 1
            
@@ -352,11 +387,13 @@ def find_toc_pages_3(pdf) -> List[int]:
     # Get page dimensions for relative measurements
     page_width = float(pdf.pages[0].mediabox[2])
     min_title_page_distance = page_width * 0.15  # 15% of page width
-    column_tolerance = page_width * 0.02  # 2% of page width
+    column_tolerance = page_width * 0.05  # 5% of page width
+    # print(f"Column tolerance: {column_tolerance}")
    
     # Enhanced patterns for TOC entries
     toc_patterns = [
-        r'^(chapter|\d+\.|appendix\s+[a-z]|[ivxlcdm]+\.)',  # Standard chapters, numbers, appendices, roman numerals
+        r'^(chapter|summary|conclusion|introduction|\d+\.|appendix\s+[a-z]|[ivxlcdm]+\.)',  # Standard chapters, summary, introduction, numbers, appendices, roman numerals
+        r'^\d+\.\d+',  # Chapter sections (e.g., 1.1, 2.3, 10.4)
         r'^[A-Z][\.\s]',  # Single letter sections
         r'^(part|section|unit)\s+[a-z0-9]',  # Other common section markers
         r'^[\u0400-\u04FF]+',  # Support for non-Latin scripts (e.g., Cyrillic)
@@ -378,7 +415,12 @@ def find_toc_pages_3(pdf) -> List[int]:
                 for j, word in enumerate(words[:-1]):
                     if any(re.match(pattern, word['text'].lower()) for pattern in toc_patterns):
                         # Check for page number with dynamic distance
-                        next_words = words[j+1:j+10]
+                        next_words = []
+                        k = j + 1
+                        while len(next_words) < 10 and k < len(words):
+                            if words[k]['text'] != '.':
+                                next_words.append(words[k])
+                            k += 1
                         if any(w['text'].isdigit() and
                               float(w['x0']) - float(word['x0']) > min_title_page_distance
                               for w in next_words):
@@ -397,24 +439,28 @@ def find_toc_pages_3(pdf) -> List[int]:
                                         current_cluster.append(x)
                                     else:
                                         if len(current_cluster) > 1:
-                                            x_clusters.append(sum(current_cluster) / len(current_cluster))
+                                            x_clusters.append(mode(current_cluster))
                                         current_cluster = [x]
                                
                                 if len(current_cluster) > 1:
-                                    x_clusters.append(sum(current_cluster) / len(current_cluster))
+                                    x_clusters.append(mode(current_cluster))
                                 if x_clusters:
                                     column_x_coords = x_clusters
+                                    # print(f"Column x-coords: {column_x_coords}")
                             break
        
         # If TOC has started, verify page follows the same structure
         if toc_started:
+            # digit_words = [word for word in words if word['text'].isdigit()]
+            # for word in digit_words:
+            #     print(f"Digit: {word['text']} | x0: {word['x0']:.2f}")
             # Check for consistent column structure with dynamic tolerance
             if column_x_coords:
                 page_numbers = [w for w in words if w['text'].isdigit()]
                 if page_numbers:
                     current_x_coords = [float(w['x0']) for w in page_numbers]
                     matches_structure = any(
-                        any(abs(x - col_x) < column_tolerance for col_x in column_x_coords)
+                        any(abs(x - col_x) <= column_tolerance for col_x in column_x_coords)
                         for x in current_x_coords
                     )
                     if not matches_structure:
@@ -433,30 +479,41 @@ def find_toc_pages_3(pdf) -> List[int]:
            
             # Check for TOC entry pattern with dynamic distance
             entries_found = 0
+            page_numbers_found = 0  # Initialize a counter for page numbers
             for j, word in enumerate(words[:-1]):
                 if any(re.match(pattern, word['text'].lower()) for pattern in toc_patterns):
-                    next_words = words[j+1:j+10]
+                    next_words = []
+                    k = j + 1
+                    while len(next_words) < 10 and k < len(words):
+                        if words[k]['text'] != '.':
+                            next_words.append(words[k])
+                        k += 1
                     if any(w['text'].isdigit() and
                           float(w['x0']) - float(word['x0']) > min_title_page_distance
                           for w in next_words):
                         entries_found += 1
-           
-            # If we find very few TOC-like entries, it might be the end
-            if entries_found < 2 and i > min(toc_pages):
+            
+            # Count the number of page numbers on the current page
+            page_numbers_found = sum(1 for word in words if word['text'].isdigit())
+            # If we find very few TOC-like entries or page numbers, it might be the end
+            if entries_found < 2 or page_numbers_found < 5 and i > min(toc_pages):
+                print(f"Page {i} has less than 2 TOC-like entries or {page_numbers_found} page numbers")
                 # Verify with next page
                 if i + 1 < len(pdf.pages):
                     next_page = pdf.pages[i + 1]
                     next_text = next_page.extract_text().lower()
                     if any(term in next_text for term in TOC_END_TERMS):
+                        toc_pages.add(i + 1)
+                        break
+                    if page_numbers_found < 5:
                         break
                 else:
                     break
-           
             toc_pages.add(i)
        
-        # Limit to first 50 pages
-        if i >= 50:
-            print("Error: TOC not found within the first 50 pages.")
+        # Limit to first 30 pages
+        if i >= 30:
+            print("Error: TOC not found within the first 30 pages.")
             return list(toc_pages)
    
     return list(toc_pages)

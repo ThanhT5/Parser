@@ -2,7 +2,7 @@ import os
 from openai import OpenAI
 from pydantic import BaseModel
 from typing import List
-
+from dotenv import load_dotenv
 
 class TOCEntry(BaseModel):
     level: int
@@ -27,6 +27,7 @@ class Questions(BaseModel):
 
 class ChatGPTHandler:
     def __init__(self):
+        load_dotenv()
         api_key = os.getenv("OPENAI_API_KEY")
         if not api_key:
             raise ValueError("No OpenAI API key found. Please set the OPENAI_API_KEY environment variable.")
