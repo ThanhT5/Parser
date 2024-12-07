@@ -72,8 +72,8 @@ async def root():
 @app.post("/generate_questions")
 async def generate_questions(
     file: UploadFile = File(...),
-    chapter: int = None,
-    total_questions: int = 30
+    chapter: str = None,
+    total_questions: str = "30"
 ):
     """
     Process PDF and optionally generate questions for a specific chapter.
@@ -88,6 +88,10 @@ async def generate_questions(
     Returns:
         JSON response containing processing status and optionally generated questions
     """
+    # Convert both parameters to integers if provided
+    chapter_num = int(chapter) if chapter is not None else None
+    questions_num = int(total_questions) if total_questions is not None else 30
+    
     contents = await file.read()
     pdf_hash = get_pdf_hash(contents)
     temp_path = f"temp_{uuid.uuid4()}_{file.filename}"
@@ -142,8 +146,8 @@ async def generate_questions(
                     pdf,
                     stored_data["toc"],
                     stored_data["page_offset"],
-                    chapter,
-                    total_questions=total_questions
+                    chapter_num,
+                    total_questions=questions_num
                 )
                
                 # Generate questions for each section based on distribution
@@ -160,7 +164,7 @@ async def generate_questions(
                
                 return {
                     "status": "success",
-                    "chapter": chapter,
+                    "chapter": chapter_num,
                     "questions": all_questions,
                     "distribution": question_distribution
                 }
