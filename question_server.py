@@ -69,21 +69,27 @@ async def root():
     return {"message": "Welcome to the PDF Parser API!"}
 
 
-@app.post("/upload_pdf")
-async def upload_pdf(file: UploadFile = File(...)):
-    """Process PDF and store structured TOC data"""
+@app.post("/generate_questions")
+async def generate_questions(
+    file: UploadFile = File(...),
+    chapter: int = None,
+    total_questions: int = 30
+):
+    """
+    Process PDF and optionally generate questions for a specific chapter.
+    If chapter is not provided, only processes the PDF and stores the data.
+    If chapter is provided, generates questions for that chapter.
+   
+    Args:
+        file: PDF file upload
+        chapter: Optional chapter number to generate questions for
+        total_questions: Total number of questions to generate for the chapter
+   
+    Returns:
+        JSON response containing processing status and optionally generated questions
+    """
     contents = await file.read()
     pdf_hash = get_pdf_hash(contents)
-   
-    # Check if we already have the data
-    if pdf_hash in pdf_data:
-        return {
-            "status": "success",
-            "message": "PDF already processed",
-            "toc": pdf_data[pdf_hash]["toc"],
-            "page_offset": pdf_data[pdf_hash]["page_offset"]
-        }
-   
     temp_path = f"temp_{uuid.uuid4()}_{file.filename}"
    
     try:
@@ -91,98 +97,47 @@ async def upload_pdf(file: UploadFile = File(...)):
         with open(temp_path, "wb") as f:
             f.write(contents)
        
-        with pdfplumber.open(temp_path) as pdf:
-            try:
-                # Process TOC
-                toc_pages = find_toc_pages(pdf)
-                if not toc_pages:
-                    raise TOCNotFoundError("No table of contents found in the document")
+        # Process PDF if not already processed
+        if pdf_hash not in pdf_data:
+            with pdfplumber.open(temp_path) as pdf:
+                try:
+                    # Process TOC
+                    toc_pages = find_toc_pages(pdf)
+                    if not toc_pages:
+                        raise TOCNotFoundError("No table of contents found in the document")
+                       
+                    last_toc_page = max(toc_pages)
+                    toc_content = parse_table_of_contents(pdf, toc_pages)
+                    structured_toc = ai_handler.process_toc(toc_content)
+                    page_offset = find_page_offset(pdf, structured_toc.model_dump(), last_toc_page)
                    
-                last_toc_page = max(toc_pages)
-                toc_content = parse_table_of_contents(pdf, toc_pages)
-                structured_toc = ai_handler.process_toc(toc_content)
-                page_offset = find_page_offset(pdf, structured_toc.model_dump(), last_toc_page)
-               
-                # Store the data
-                pdf_data[pdf_hash] = {
-                    "toc": structured_toc.model_dump(),
-                    "page_offset": page_offset,
-                    "filename": file.filename  # Store filename for reference
-                }
-                # Persist to file
-                save_pdf_data(pdf_data)
-               
-                return {
-                    "status": "success",
-                    "toc": structured_toc.model_dump(),
-                    "page_offset": page_offset
-                }
-            except (PDFExtractionError, TOCNotFoundError) as e:
-                return {
-                    "status": "error",
-                    "message": str(e)
-                }
-   
-    finally:
-        # Cleanup temporary file
-        if os.path.exists(temp_path):
-            os.remove(temp_path)
-
-
-@app.get("/list_processed_pdfs")
-async def list_processed_pdfs():
-    """List all processed PDFs and their metadata"""
-    return {
-        "status": "success",
-        "pdfs": [
-            {
-                "hash": pdf_hash,
-                "filename": data.get("filename", "Unknown"),
-                "has_toc": bool(data.get("toc")),
-                "page_offset": data.get("page_offset")
+                    # Store the data
+                    pdf_data[pdf_hash] = {
+                        "toc": structured_toc.model_dump(),
+                        "page_offset": page_offset,
+                        "filename": file.filename
+                    }
+                    # Persist to file
+                    save_pdf_data(pdf_data)
+                   
+                except (PDFExtractionError, TOCNotFoundError) as e:
+                    return {
+                        "status": "error",
+                        "message": str(e)
+                    }
+       
+        # If no chapter is provided, just return processing status
+        if chapter is None:
+            return {
+                "status": "success",
+                "message": "PDF processed successfully" if pdf_hash not in pdf_data else "PDF was already processed"
             }
-            for pdf_hash, data in pdf_data.items()
-        ]
-    }
-
-
-@app.post("/generate_questions")
-async def generate_questions(
-    file: UploadFile = File(...),
-    chapter: int = 1,
-    total_questions: int = 30
-):
-    """
-    Generate questions for a specific chapter using stored TOC data.
-   
-    Args:
-        file: PDF file upload
-        chapter: Chapter number to generate questions for
-        total_questions: Total number of questions to generate for the chapter
-   
-    Returns:
-        JSON response containing generated questions or error message
-    """
-    contents = await file.read()
-    pdf_hash = get_pdf_hash(contents)
-   
-    if pdf_hash not in pdf_data:
-        return {
-            "status": "error",
-            "message": "PDF not processed. Please upload the PDF with /upload_pdf first."
-        }
-   
-    stored_data = pdf_data[pdf_hash]
-    temp_path = f"temp_{uuid.uuid4()}_{file.filename}"
-   
-    try:
-        with open(temp_path, "wb") as f:
-            f.write(contents)
-           
+       
+        # Generate questions if chapter is provided
+        stored_data = pdf_data[pdf_hash]
         with pdfplumber.open(temp_path) as pdf:
             try:
                 # Extract sections and get question distribution
-                print(chapter)
                 sections, question_distribution = extract_chapter_sections(
                     pdf,
                     stored_data["toc"],
@@ -221,8 +176,22 @@ async def generate_questions(
             os.remove(temp_path)
 
 
+@app.get("/list_processed_pdfs")
+async def list_processed_pdfs():
+    """List all processed PDFs and their metadata"""
+    return {
+        "status": "success",
+        "pdfs": [
+            {
+                "hash": pdf_hash,
+                "filename": data.get("filename", "Unknown"),
+                "has_toc": bool(data.get("toc")),
+                "page_offset": data.get("page_offset")
+            }
+            for pdf_hash, data in pdf_data.items()
+        ]
+    }
+
+
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000)
-
-
-
