@@ -166,7 +166,6 @@ async def generate_questions(
                     "status": "success",
                     "chapter": chapter_num,
                     "questions": all_questions,
-                    "distribution": question_distribution
                 }
             except PDFExtractionError as e:
                 return {
