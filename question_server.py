@@ -1,4 +1,4 @@
-from fastapi import FastAPI, File, UploadFile
+from fastapi import FastAPI, File, UploadFile, Form
 from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 import pdfplumber
@@ -72,8 +72,8 @@ async def root():
 @app.post("/generate_questions")
 async def generate_questions(
     file: UploadFile = File(...),
-    chapter: int = None,
-    total_questions: int = 30
+    chapter: int = Form(None),
+    total_questions: int = Form(30)
 ):
     """
     Process PDF and optionally generate questions for a specific chapter.
